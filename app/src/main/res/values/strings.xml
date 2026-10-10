@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">小账本</string>
+    <string name="capture_service_label">小账本 · 支付通知捕获</string>
+    <string name="widget_label">小账本 · 今日额度</string>
+
+    <!-- Bottom navigation -->
+    <string name="tab_home">首页</string>
+    <string name="tab_daily">每日</string>
+    <string name="tab_transactions">流水</string>
+    <string name="tab_stats">统计</string>
+    <string name="tab_settings">我的</string>
+    <string name="action_add_transaction">记一笔</string>
+
+    <!-- Widget -->
+    <string name="widget_today_left">今日还能花</string>
+    <string name="widget_month_left">本月可用</string>
+    <string name="widget_loading">正在加载…</string>
+
+    <!-- Capture notification channel -->
+    <string name="channel_capture_name">支付捕获</string>
+    <string name="channel_capture_desc">付款后自动记一笔时的即时提示</string>
+    <string name="channel_alert_name">预算提醒</string>
+    <string name="channel_alert_desc">预算接近或超出额度时的提醒</string>
+    <string name="channel_service_name">后台服务</string>
+    <string name="channel_service_desc">实时捕获运行时的常驻通知</string>
+
+    <string name="capture_notification_title">已记录一笔</string>
+    <string name="capture_action_reclassify">改分类</string>
+    <string name="capture_service_notification">小账本正在监听支付通知 · 仅在本机处理</string>
+</resources>

@@ -1,0 +1,27 @@
+# Machine-specific / secret
+local.properties
+keystore.properties
+*.jks
+*.keystore
+
+# Build output
+build/
+.gradle/
+app/build/
+.kotlin/
+
+# Legacy location of the test sandbox (now under build/test-sandbox). Kept so an old
+# checkout — or a stray `git add -A` — can never stage the 364 MB Robolectric cache.
+.android-build/
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Local verification scratch (screenshots pulled off a device, logcat dumps, …)
+_verify/
+*.log
+captures/
+.externalNativeBuild/
+.cxx/

@@ -1,0 +1,20 @@
+# Normalise line endings in the repository to LF, so a Windows checkout and a
+# Linux/macOS checkout produce identical diffs. Without this, Git rewrites every
+# source file to CRLF on Windows and the first Linux contributor sees the whole
+# tree as modified.
+* text=auto eol=lf
+
+# Windows-only scripts must keep CRLF or cmd.exe will not run them.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary — never touch, never diff.
+*.jar binary
+*.jks binary
+*.keystore binary
+*.apk binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.so binary
