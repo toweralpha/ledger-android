@@ -5,8 +5,15 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.util.Log
+import com.xiaozhangben.ledger.capture.CaptureSelfHealer
 import com.xiaozhangben.ledger.core.LogX
 import com.xiaozhangben.ledger.di.AppContainer
+import com.xiaozhangben.ledger.work.WorkScheduler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class LedgerApp : Application() {
 
@@ -33,6 +40,25 @@ class LedgerApp : Application() {
 
         container = AppContainer(this)
         container.bootstrap()
+
+        // Armed from the Application, not only from the boot receiver: on a fresh install
+        // no BOOT_COMPLETED has happened yet, and MY_PACKAGE_REPLACED is not guaranteed
+        // either — so the schedule could previously stay empty until the next reboot.
+        WorkScheduler.ensureScheduled(this)
+
+        // Every process start is a free chance to notice that the system has stopped
+        // running the listener, and it is the most common case in practice (the app is
+        // opened far more often than any timer fires). Silent by design: a repair that
+        // worked does not need to be announced, and the user should not have to check.
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
+                val enabled = container.settings.captureEnabled.first()
+                val outcome = CaptureSelfHealer.ensureConnected(this@LedgerApp, enabled)
+                if (outcome == CaptureSelfHealer.Outcome.REBOUND) {
+                    container.ledger.recordCaptureRepair()
+                }
+            }
+        }
     }
 
     companion object {

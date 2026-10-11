@@ -36,6 +36,34 @@ object CapturePermissions {
     fun deviceProfile(): OemProfile =
         OemGuidance.profile(OemGuidance.detect(Build.MANUFACTURER, Build.BRAND))
 
+    /**
+     * Whether the system currently has the listener **bound**, which is a different
+     * question from [isListenerEnabled].
+     *
+     * `isListenerEnabled` reads a settings string: it is the user's grant, and it stays
+     * `true` even after the system has stopped running the service. That gap is
+     * invisible, and it cost two days of unrecorded spending. This reads the service's
+     * own state instead.
+     *
+     * The listener shares the app's process (no `android:process` in the manifest), so
+     * when this is `false` while the UI is running, the system genuinely has not bound it.
+     */
+    fun isListenerConnected(): Boolean = PaymentNotificationListenerService.isConnected
+
+    /**
+     * Asks the system to bind the listener again.
+     *
+     * `requestRebind` is a static entry point precisely so it can be called from outside
+     * the running service — which is what is needed here, because the failed state is
+     * "the service is not running" and there is no instance to ask. The system still
+     * gets the final say, hence the boolean.
+     */
+    fun tryRebindListener(context: Context): Boolean = runCatching {
+        val component = ComponentName(context, PaymentNotificationListenerService::class.java)
+        android.service.notification.NotificationListenerService.requestRebind(component)
+        true
+    }.getOrDefault(false)
+
     fun openListenerSettings(context: Context) {
         safeStart(context, Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
     }

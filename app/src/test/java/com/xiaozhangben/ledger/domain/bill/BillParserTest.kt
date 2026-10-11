@@ -5,6 +5,7 @@ import com.xiaozhangben.ledger.domain.model.ExcludeReason
 import com.xiaozhangben.ledger.domain.model.TxDirection
 import com.xiaozhangben.ledger.domain.model.TxSource
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -199,11 +200,30 @@ class BillParserTest {
     @Test
     fun `a notification and a bill entry for one payment are the same payment`() {
         // The common real-world duplicate: captured live, then appearing again in the
-        // monthly bill. The notification has no transaction id; the bill row does.
+        // monthly bill. Two different channels looking at one event.
         assertTrue(
             Dedupe.looksLikeSamePayment(
-                amountA = 3200L, timeA = 1_700_000_000_000L, txnIdA = null,
-                amountB = 3200L, timeB = 1_700_000_060_000L, txnIdB = "4200001234",
+                amountA = 3200L, timeA = 1_700_000_000_000L,
+                notificationKeyA = "0|com.tencent.mm|1|null|10387", txnIdA = null,
+                amountB = 3200L, timeB = 1_700_000_060_000L,
+                notificationKeyB = null, txnIdB = "4200001234",
+            )
+        )
+    }
+
+    @Test
+    fun `two notifications of the same amount are two payments`() {
+        // This is the assertion that used to be inverted, and the inversion cost real
+        // money: every notification row lacks an official transaction id (a notification
+        // cannot carry one), so "at least one side has no id" is true for any two
+        // notifications. Two ¥32 purchases three minutes apart were merged into one and
+        // the second simply vanished. Two notifications are two events.
+        assertFalse(
+            Dedupe.looksLikeSamePayment(
+                amountA = 3200L, timeA = 1_700_000_000_000L,
+                notificationKeyA = "0|com.tencent.mm|1|null|10387", txnIdA = null,
+                amountB = 3200L, timeB = 1_700_000_120_000L,
+                notificationKeyB = "0|com.tencent.mm|2|null|10387", txnIdB = null,
             )
         )
     }
@@ -212,42 +232,60 @@ class BillParserTest {
     fun `two different bill entries are two different payments`() {
         // Both carry their own transaction id, so they are by definition distinct — two
         // genuine ¥32 purchases a minute apart in the same bill.
-        assertTrue(
-            !Dedupe.looksLikeSamePayment(
-                amountA = 3200L, timeA = 1_700_000_000_000L, txnIdA = "4200001111",
-                amountB = 3200L, timeB = 1_700_000_060_000L, txnIdB = "4200002222",
+        assertFalse(
+            Dedupe.looksLikeSamePayment(
+                amountA = 3200L, timeA = 1_700_000_000_000L, notificationKeyA = null, txnIdA = "4200001111",
+                amountB = 3200L, timeB = 1_700_000_060_000L, notificationKeyB = null, txnIdB = "4200002222",
             )
         )
     }
 
     @Test
-    fun `two notifications for one payment are the same payment`() {
-        // Payment apps do post more than one notification per purchase; neither carries
-        // a transaction id, so the pair must be treated as one.
-        assertTrue(
+    fun `a row keeps the channel it was born in even after being enriched`() {
+        // A live capture later enriched by a bill import carries *both* a notification key
+        // and a transaction id. It is still a notification-born row, so a second
+        // notification of the same amount must not merge into it.
+        assertEquals(
+            Dedupe.CaptureChannel.NOTIFICATION,
+            Dedupe.channelOf(notificationKey = "k", sourceTxnId = "4200001234"),
+        )
+        assertFalse(
             Dedupe.looksLikeSamePayment(
-                amountA = 1L, timeA = 1_791_600_479_078L, txnIdA = null,
-                amountB = 1L, timeB = 1_791_600_505_000L, txnIdB = null,
+                amountA = 1680L, timeA = 1_700_000_000_000L,
+                notificationKeyA = "k1", txnIdA = "4200001234",
+                amountB = 1680L, timeB = 1_700_000_060_000L,
+                notificationKeyB = "k2", txnIdB = null,
+            )
+        )
+    }
+
+    @Test
+    fun `a row with neither channel is never merged`() {
+        assertEquals(Dedupe.CaptureChannel.OTHER, Dedupe.channelOf(null, null))
+        assertFalse(
+            Dedupe.looksLikeSamePayment(
+                amountA = 3200L, timeA = 1_700_000_000_000L, notificationKeyA = null, txnIdA = null,
+                amountB = 3200L, timeB = 1_700_000_010_000L, notificationKeyB = "k", txnIdB = null,
             )
         )
     }
 
     @Test
     fun `the same amount eight minutes apart is not the same payment`() {
-        assertTrue(
-            !Dedupe.looksLikeSamePayment(
-                3200L, 1_700_000_000_000L, null,
-                3200L, 1_700_000_480_000L, null,
+        assertFalse(
+            Dedupe.looksLikeSamePayment(
+                amountA = 3200L, timeA = 1_700_000_000_000L, notificationKeyA = "k", txnIdA = null,
+                amountB = 3200L, timeB = 1_700_000_480_000L, notificationKeyB = null, txnIdB = "4200001234",
             )
         )
     }
 
     @Test
     fun `a different amount is never the same payment`() {
-        assertTrue(
-            !Dedupe.looksLikeSamePayment(
-                3200L, 1_700_000_000_000L, null,
-                3300L, 1_700_000_010_000L, null,
+        assertFalse(
+            Dedupe.looksLikeSamePayment(
+                amountA = 3200L, timeA = 1_700_000_000_000L, notificationKeyA = "k", txnIdA = null,
+                amountB = 3300L, timeB = 1_700_000_010_000L, notificationKeyB = null, txnIdB = "4200001234",
             )
         )
     }

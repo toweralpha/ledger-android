@@ -25,8 +25,11 @@ android {
         applicationId = "com.xiaozhangben.ledger"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        // versionCode must increase with every release that ships: Android refuses to
+        // install an APK whose versionCode is not greater than the installed one, and
+        // reinstalling over the top is the only update path that keeps the ledger data.
+        versionCode = 2
+        versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
         // No native code is shipped, so a single APK is already universal

@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ImportBatchEntity::class,
         CaptureStatsEntity::class,
     ],
-    version = 3,
+    version = 5,
     exportSchema = true,
 )
 abstract class LedgerDatabase : RoomDatabase() {
@@ -94,9 +94,33 @@ abstract class LedgerDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v3 -> v4: adds the notification heartbeat to the diagnostics row.
+         *
+         * A plain ADD COLUMN with a NULL default, so no table rebuild is needed and
+         * existing counters are untouched.
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `capture_stats` ADD COLUMN `lastNotificationSeenAt` INTEGER")
+            }
+        }
+
+        /**
+         * v4 -> v5: counts the times the app reconnected the listener on its own.
+         *
+         * Two plain ADD COLUMNs, so existing counters survive untouched.
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `capture_stats` ADD COLUMN `repairCount` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `capture_stats` ADD COLUMN `lastRepairAt` INTEGER")
+            }
+        }
+
         fun build(context: Context): LedgerDatabase =
             Room.databaseBuilder(context.applicationContext, LedgerDatabase::class.java, NAME)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
     }
 }

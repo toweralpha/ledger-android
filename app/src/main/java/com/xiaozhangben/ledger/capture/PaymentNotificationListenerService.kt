@@ -46,16 +46,30 @@ class PaymentNotificationListenerService : NotificationListenerService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /** `sbn.key` -> when it was handled. Bounded; notifications do re-post. */
-    private val handledKeys = object : LinkedHashMap<String, Long>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean = size > 256
+    /**
+     * What was last handled for a given `sbn.key`, and when.
+     *
+     * Keyed by `sbn.key` alone this would swallow a *new* payment that happens to reuse
+     * the key: WeChat is free to update a notification in place, and a payment app that
+     * keeps one notification slot could post two different receipts under one key. The
+     * signature makes the guard specific to a re-post of the *same* content.
+     */
+    private data class Handled(val signature: String, val at: Long)
+
+    /** `sbn.key` -> the last thing handled for it. Bounded; notifications do re-post. */
+    private val handledKeys = object : LinkedHashMap<String, Handled>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Handled>?): Boolean = size > 256
     }
 
     /** Single-element holder for the last "skip reason" write, to throttle those writes. */
     private val lastSkipRecord = longArrayOf(0L)
 
+    /** Single-element holder for the last heartbeat write. See [recordHeartbeatIfDue]. */
+    private val lastHeartbeat = longArrayOf(0L)
+
     override fun onListenerConnected() {
         super.onListenerConnected()
+        isConnected = true
         LogX.d("Capture") { "listener connected" }
         scope.launch {
             runCatching { appContainer.ledger.onListenerConnected() }
@@ -64,6 +78,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
+        isConnected = false
         scope.launch {
             runCatching { appContainer.ledger.onListenerDisconnected() }
         }
@@ -84,11 +99,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
 
         val key = notification.key
         val now = System.currentTimeMillis()
-        synchronized(handledKeys) {
-            val previous = handledKeys[key]
-            if (previous != null && now - previous < REPOST_WINDOW_MILLIS) return
-            handledKeys[key] = now
-        }
+        recordHeartbeatIfDue(now)
 
         val extras = notification.notification?.extras
         val outcome = NotificationTextParser.parseOutcome(
@@ -105,6 +116,18 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             return
         }
         val payment = (outcome as ParseOutcome.Captured).payment
+
+        // A re-post of the same notification must not be recorded twice. Guarding on the
+        // key *and* the parsed content means a genuinely new payment sharing the key still
+        // gets through — dropping a real payment is invisible, recording it twice is not.
+        val signature = "${payment.direction}|${payment.amountCents}|${payment.counterparty.orEmpty()}"
+        synchronized(handledKeys) {
+            val previous = handledKeys[key]
+            if (previous != null && previous.signature == signature && now - previous.at < REPOST_WINDOW_MILLIS) {
+                return
+            }
+            handledKeys[key] = Handled(signature, now)
+        }
 
         // Use the notification's own timestamp: it is when the payment happened, and
         // it is immune to our process being woken up late.
@@ -149,6 +172,23 @@ class PaymentNotificationListenerService : NotificationListenerService() {
     }
 
     /**
+     * Heartbeat: a notification from a payment app reached us at all.
+     *
+     * Throttled in memory to one write every few minutes. WeChat alone can post a
+     * notification every few seconds in a busy group chat, and a database write per
+     * message would be both pointless and rude to the battery.
+     */
+    private fun recordHeartbeatIfDue(now: Long) {
+        synchronized(lastHeartbeat) {
+            if (now - lastHeartbeat[0] < HEARTBEAT_INTERVAL_MILLIS) return
+            lastHeartbeat[0] = now
+        }
+        scope.launch {
+            runCatching { appContainer.ledger.recordNotificationSeen(now) }
+        }
+    }
+
+    /**
      * Remembers the reason a notification was refused — but only when the notification
      * actually carried an amount.
      *
@@ -172,6 +212,7 @@ class PaymentNotificationListenerService : NotificationListenerService() {
     }
 
     override fun onDestroy() {
+        isConnected = false
         scope.cancel()
         super.onDestroy()
     }
@@ -271,5 +312,27 @@ class PaymentNotificationListenerService : NotificationListenerService() {
 
         private const val REPOST_WINDOW_MILLIS = 60_000L
         private const val SKIP_RECORD_THROTTLE_MILLIS = 5_000L
+        private const val HEARTBEAT_INTERVAL_MILLIS = 5 * 60_000L
+
+        /**
+         * Whether the system currently has this listener bound.
+         *
+         * This is the difference between "the user granted notification access" and
+         * "capture is actually running", and conflating the two is what let a real
+         * failure go unnoticed for two days: the permission stayed granted while the
+         * system had quietly unbound the service, so no notification ever reached
+         * [onNotificationPosted] and nothing was recorded.
+         *
+         * `Settings.Secure.ENABLED_NOTIFICATION_LISTENERS` (what
+         * [CapturePermissions.isListenerEnabled] reads) only ever reports the grant.
+         * This flag reports the truth.
+         *
+         * The service has no `android:process` in the manifest, so it shares the app's
+         * process: when the UI is running and this is `false`, the system genuinely has
+         * not bound the listener.
+         */
+        @Volatile
+        var isConnected: Boolean = false
+            private set
     }
 }

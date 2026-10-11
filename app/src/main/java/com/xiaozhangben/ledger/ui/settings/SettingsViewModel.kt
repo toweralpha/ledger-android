@@ -2,6 +2,8 @@ package com.xiaozhangben.ledger.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.xiaozhangben.ledger.capture.CaptureHealth
+import com.xiaozhangben.ledger.capture.CaptureHealthEvaluator
 import com.xiaozhangben.ledger.capture.CapturePermissions
 import com.xiaozhangben.ledger.data.backup.BackupCodec
 import com.xiaozhangben.ledger.data.backup.BackupFile
@@ -13,6 +15,7 @@ import com.xiaozhangben.ledger.data.repository.SettingsRepository
 import com.xiaozhangben.ledger.data.repository.ThemeMode
 import com.xiaozhangben.ledger.di.AppContainer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -21,6 +24,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** How long to give the system to bind the listener before believing it did not. */
+private const val REBIND_SETTLE_MILLIS = 1_500L
+
 data class SettingsUiState(
     val captureEnabled: Boolean = true,
     val showCaptureCard: Boolean = true,
@@ -28,6 +34,7 @@ data class SettingsUiState(
     val dailySummary: Boolean = false,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val listenerAuthorised: Boolean = false,
+    val listenerConnected: Boolean = false,
     val notificationsAllowed: Boolean = true,
     val stats: CaptureStatsEntity? = null,
     val transactionCount: Int = 0,
@@ -36,10 +43,27 @@ data class SettingsUiState(
     val learnedRuleCount: Int = 0,
     val lastImportAt: Long? = null,
 ) {
-    val captureHealthy: Boolean get() = captureEnabled && listenerAuthorised
+    /**
+     * Whether capture is actually working.
+     *
+     * `captureEnabled && listenerAuthorised` was the old definition and it is wrong: the
+     * permission stays granted after the system has stopped the listener service, so the
+     * panel reported everything fine while nothing was being recorded.
+     */
+    val captureHealth: CaptureHealth
+        get() = CaptureHealthEvaluator.evaluate(
+            captureEnabled = captureEnabled,
+            authorised = listenerAuthorised,
+            connected = listenerConnected,
+            lastNotificationSeenAt = stats?.lastNotificationSeenAt,
+            lastListenerConnectedAt = stats?.lastListenerConnectedAt,
+            now = System.currentTimeMillis(),
+        )
+
+    /** Days since the last notification of any kind, or null if there has never been one. */
     val silentDays: Int?
         get() {
-            val last = stats?.lastCaptureAt ?: return null
+            val last = stats?.lastNotificationSeenAt ?: return null
             return ((System.currentTimeMillis() - last) / (24 * 60 * 60 * 1000L)).toInt()
         }
 }
@@ -65,6 +89,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
     private data class EnvironmentState(
         val listenerAuthorised: Boolean = false,
+        val listenerConnected: Boolean = false,
         val notificationsAllowed: Boolean = true,
     )
 
@@ -134,6 +159,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
             dailySummary = prefs.dailySummary,
             themeMode = prefs.themeMode,
             listenerAuthorised = env.listenerAuthorised,
+            listenerConnected = env.listenerConnected,
             notificationsAllowed = env.notificationsAllowed,
             stats = data.stats,
             transactionCount = data.transactionCount,
@@ -151,12 +177,35 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         val context = container.appContext
         environment.value = EnvironmentState(
             listenerAuthorised = CapturePermissions.isListenerEnabled(context),
+            listenerConnected = CapturePermissions.isListenerConnected(),
             notificationsAllowed = CapturePermissions.canPostNotifications(context),
         )
     }
 
     fun setCaptureEnabled(value: Boolean) {
-        viewModelScope.launch { container.settings.setCaptureEnabled(value) }
+        viewModelScope.launch {
+            container.settings.setCaptureEnabled(value)
+            // Toggling capture back on is the user's most natural "try again", so use it
+            // to ask the system for a fresh bind as well.
+            if (value) retryListenerBinding()
+        }
+    }
+
+    /**
+     * Asks the system to bind the listener again, then re-reads the state.
+     *
+     * Best effort: the system may refuse, in which case the visible remedy is for the
+     * user to toggle notification access by hand. The point is that the app tries, and
+     * that the panel shows the result either way.
+     */
+    fun retryListenerBinding() {
+        viewModelScope.launch {
+            if (CapturePermissions.isListenerEnabled(container.appContext)) {
+                CapturePermissions.tryRebindListener(container.appContext)
+                delay(REBIND_SETTLE_MILLIS)
+            }
+            refreshEnvironment()
+        }
     }
 
     fun setShowCaptureCard(value: Boolean) {

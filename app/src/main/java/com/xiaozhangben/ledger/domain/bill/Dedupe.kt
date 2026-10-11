@@ -54,35 +54,60 @@ object Dedupe {
     fun manualKey(id: String): String = "MANUAL:id:$id"
 
     /**
+     * Which channel a row was born in.
+     *
+     * The distinction that matters is *how the row came to exist*, not what it currently
+     * carries: a row captured from a notification keeps its `notificationKey` even after
+     * a bill import enriches it with a transaction id.
+     */
+    enum class CaptureChannel { NOTIFICATION, BILL, OTHER }
+
+    fun channelOf(notificationKey: String?, sourceTxnId: String?): CaptureChannel = when {
+        !notificationKey.isNullOrBlank() -> CaptureChannel.NOTIFICATION
+        !sourceTxnId.isNullOrBlank() -> CaptureChannel.BILL
+        else -> CaptureChannel.OTHER
+    }
+
+    /**
      * True when two rows describe one payment.
      *
-     * All three conditions must hold:
+     * Two conditions: the same amount, captured within [FUZZY_WINDOW_MILLIS]; **and the
+     * two rows came from different channels**.
      *
-     *  1. the same amount;
-     *  2. captured within [FUZZY_WINDOW_MILLIS] of each other;
-     *  3. **at least one side has no official transaction id** — i.e. at least one of them
-     *     came from a notification, which cannot carry one.
+     * The channel rule is the whole point, and getting it wrong has cost a real bug in
+     * both directions:
      *
-     * Condition 3 is the whole point. An earlier version required the two rows to come
-     * from *different* apps, which excluded the single most common duplicate: a payment
-     * captured live from WeChat, then appearing again in the WeChat bill that the user
-     * imports at the end of the month. That would have double-counted every
-     * realtime-captured purchase. Two rows that each carry their own distinct bill
-     * transaction id are, by definition, two different payments.
+     *  - An earlier version required different *apps*, which excluded the most common
+     *    duplicate of all — a payment captured live from WeChat and then appearing again
+     *    in the WeChat bill — so a monthly import re-recorded everything captured live.
+     *  - The next version keyed off "does this row have an official transaction id?",
+     *    which is true for *every* notification (a notification cannot carry one). Two
+     *    genuine ¥8.00 coffees three minutes apart were therefore merged into one, losing
+     *    the second payment with no visible trace.
+     *
+     * A notification and a bill entry are two *views* of one payment, so they may be the
+     * same event. Two notifications, or two bill rows, are two separate events — re-posts
+     * of a single notification are handled upstream by `sbn.key`, not here.
      */
     fun looksLikeSamePayment(
         amountA: Long,
         timeA: Long,
+        notificationKeyA: String?,
         txnIdA: String?,
         amountB: Long,
         timeB: Long,
+        notificationKeyB: String?,
         txnIdB: String?,
     ): Boolean {
         if (amountA != amountB) return false
         if (kotlin.math.abs(timeA - timeB) > FUZZY_WINDOW_MILLIS) return false
-        val aHasId = !txnIdA.isNullOrBlank()
-        val bHasId = !txnIdB.isNullOrBlank()
-        return !(aHasId && bHasId)
+
+        val channelA = channelOf(notificationKeyA, txnIdA)
+        val channelB = channelOf(notificationKeyB, txnIdB)
+        if (channelA == CaptureChannel.OTHER || channelB == CaptureChannel.OTHER) return false
+        // Same channel means two distinct events. Do not merge: dropping a real payment
+        // is invisible to the user, while a duplicate at least shows up in the list.
+        return channelA != channelB
     }
 
     fun sha256Hex(text: String): String {

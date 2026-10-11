@@ -213,6 +213,12 @@ data class ImportBatchEntity(
  * notification that arrived and was *rejected* — the user sees nothing, and without the
  * reason there is no way to tell "WeChat never posted it" from "our parser refused it".
  * It stores a reason code, never any notification content.
+ *
+ * `lastNotificationSeenAt` is the heartbeat. WeChat posts notifications constantly, so
+ * "the listener is bound but has not seen a single notification in a day" is a different
+ * failure from "the listener is not bound at all", and the two need different fixes.
+ * Unlike the capture counter it updates on *any* notification from a payment app,
+ * including chat messages, so it does not depend on the user having paid.
  */
 @Serializable
 @Entity(tableName = "capture_stats")
@@ -225,4 +231,14 @@ data class CaptureStatsEntity(
     val lastDisconnectedAt: Long? = null,
     val lastSkippedAt: Long? = null,
     val lastSkipReason: String? = null,
+    val lastNotificationSeenAt: Long? = null,
+    /**
+     * How many times the app had to reconnect the listener by itself.
+     *
+     * Worth persisting rather than logging: it is the proof that the self-healing works,
+     * and it quantifies how often this ROM drops the binding — which is the one thing
+     * about this failure that is still not understood.
+     */
+    val repairCount: Int = 0,
+    val lastRepairAt: Long? = null,
 )

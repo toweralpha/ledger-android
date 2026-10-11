@@ -164,4 +164,24 @@ abstract class CaptureStatsDao {
         val current = get() ?: CaptureStatsEntity()
         upsert(current.copy(lastSkippedAt = now, lastSkipReason = reason))
     }
+
+    /**
+     * Heartbeat: a notification from a payment app reached the listener.
+     *
+     * Recorded regardless of whether it turned out to be a payment, so this updates many
+     * times a day on a phone where WeChat is used at all. That is the point — it can say
+     * "the listener is alive and receiving" even on a day with no spending.
+     */
+    @Transaction
+    open suspend fun recordNotificationSeen(now: Long) {
+        val current = get() ?: CaptureStatsEntity()
+        upsert(current.copy(lastNotificationSeenAt = now))
+    }
+
+    /** The app had to reconnect the listener itself. */
+    @Transaction
+    open suspend fun recordRepair(now: Long) {
+        val current = get() ?: CaptureStatsEntity()
+        upsert(current.copy(repairCount = current.repairCount + 1, lastRepairAt = now))
+    }
 }

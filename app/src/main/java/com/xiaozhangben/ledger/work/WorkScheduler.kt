@@ -12,17 +12,25 @@ import java.util.concurrent.TimeUnit
 /**
  * Background scheduling.
  *
- * There is exactly one periodic job and it is cheap: it refreshes the widget and
- * evaluates budget alerts. Notification capture is event-driven and needs no
- * schedule at all, which is what keeps idle CPU at zero.
+ * Two periodic jobs, both cheap:
  *
- * Six hours (four runs a day) is deliberate: it is far inside WorkManager's
- * doze-friendly allowance, and budget alerts do not need minute precision.
+ *  - the daily-ish budget/widget check, which needs no precision
+ *  - a 15-minute capture watchdog, which exists because a
+ *    `NotificationListenerService` can be stopped by the system while its permission stays
+ *    granted, and nothing else in the app runs to notice
+ *
+ * Notification capture itself is still event-driven and needs no schedule — this only
+ * guards the binding, and returns immediately when it is healthy, which is almost always.
  */
 object WorkScheduler {
 
     private const val UNIQUE_PERIODIC = "ledger-periodic-check"
     private const val PERIOD_HOURS = 6L
+
+    private const val UNIQUE_WATCHDOG = "ledger-capture-watchdog"
+
+    /** WorkManager's floor for periodic work, and the exposure window we accept. */
+    private const val WATCHDOG_MINUTES = 15L
 
     fun ensureScheduled(context: Context) {
         val request = PeriodicWorkRequestBuilder<LedgerPeriodicWorker>(PERIOD_HOURS, TimeUnit.HOURS)
@@ -40,6 +48,32 @@ object WorkScheduler {
                 request,
             )
         }.onFailure { LogX.e("WorkScheduler", it) { "failed to schedule periodic work" } }
+
+        ensureWatchdogScheduled(context)
+    }
+
+    /**
+     * Schedules the capture watchdog.
+     *
+     * `UPDATE` rather than `KEEP` so that changing the interval or the worker class in a
+     * future release actually takes effect on phones that already have it scheduled —
+     * `KEEP` would leave them running the old definition for ever.
+     */
+    fun ensureWatchdogScheduled(context: Context) {
+        val request = PeriodicWorkRequestBuilder<CaptureWatchdogWorker>(
+            WATCHDOG_MINUTES, TimeUnit.MINUTES,
+        )
+            .setConstraints(Constraints.Builder().build())
+            .addTag("ledger")
+            .build()
+
+        runCatching {
+            WorkManager.getInstance(context.applicationContext).enqueueUniquePeriodicWork(
+                UNIQUE_WATCHDOG,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                request,
+            )
+        }.onFailure { LogX.e("WorkScheduler", it) { "failed to schedule capture watchdog" } }
     }
 
     /** Aims the first run shortly after midnight, when the month/day rolls over. */

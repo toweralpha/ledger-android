@@ -61,6 +61,15 @@ class LedgerRepositoryDedupeTest {
         database.close()
     }
 
+    /**
+     * A row exactly as the notification listener builds one.
+     *
+     * The [notificationKey] is not decoration: every real notification row carries one
+     * (it is `sbn.key`), and the cross-channel dedupe rule reads it to decide which
+     * channel the row was born in. An earlier version of this helper omitted it, which
+     * made the "notification" rows indistinguishable from manual ones and quietly
+     * disabled the very rule these tests exist to check.
+     */
     private fun notification(
         amountCents: Long = 3200L,
         source: TxSource = TxSource.WECHAT,
@@ -72,7 +81,30 @@ class LedgerRepositoryDedupeTest {
         occurredAt = at,
         amountCents = amountCents,
         counterpartyRaw = counterparty,
+        notificationKey = "0|${source.packageName()}|$at|null|10387",
     )
+
+    /** A row exactly as the bill importer builds one: an official id and no notification. */
+    private fun billRow(
+        txnId: String,
+        amountCents: Long = 3200L,
+        source: TxSource = TxSource.WECHAT,
+        counterparty: String? = "星巴克",
+        at: Long = noon,
+    ) = NewTransaction(
+        source = source,
+        direction = TxDirection.EXPENSE,
+        occurredAt = at,
+        amountCents = amountCents,
+        counterpartyRaw = counterparty,
+        sourceTxnId = txnId,
+    )
+
+    private fun TxSource.packageName(): String = when (this) {
+        TxSource.WECHAT -> "com.tencent.mm"
+        TxSource.ALIPAY -> "com.eg.android.AlipayGphone"
+        else -> "unknown"
+    }
 
     private fun manual(amountCents: Long, at: Long, note: String? = null) = NewTransaction(
         source = TxSource.MANUAL,
@@ -118,14 +150,15 @@ class LedgerRepositoryDedupeTest {
     @Test
     fun `a payment captured live is not recorded again when the bill is imported`() = runTest {
         // THE case that matters: pay with WeChat (captured immediately), then import the
-        // WeChat bill at the end of the month. The bill row carries a transaction id, the
-        // notification row cannot, and the two must collapse into one entry.
+        // WeChat bill at the end of the month. The bill row carries an official
+        // transaction id, the notification row carries a notification key, and because
+        // they are two different channels looking at one event they must collapse.
         val captured = repository.insert(
             notification(source = TxSource.WECHAT, at = noon),
             now = noon,
         )
         val imported = repository.insert(
-            notification(source = TxSource.WECHAT, at = noon + 30_000L).copy(sourceTxnId = "4200001234202506030001"),
+            billRow(txnId = "4200001234202506030001", at = noon + 30_000L),
             now = noon + 30_000L,
         )
 
@@ -135,30 +168,37 @@ class LedgerRepositoryDedupeTest {
     }
 
     @Test
-    fun `the second notification an app posts for one payment is not a second payment`() = runTest {
+    fun `two notifications of the same amount are two payments`() = runTest {
+        // The rule that used to be wrong, and the bug it caused: every notification lacks
+        // an official transaction id, so "at least one side has no id" was true for any
+        // pair of notifications and two ¥32 purchases minutes apart were merged into one.
+        // The second payment disappeared with no trace — the same class of silent loss as
+        // a listener that never ran.
         val first = repository.insert(notification(at = noon), now = noon)
-        // WeChat posted a second notification 26 seconds later for the same ¥32; observed
-        // on a real device. Neither carries a transaction id.
-        val second = repository.insert(
-            notification(at = noon + 26_000L, counterparty = null),
-            now = noon + 26_000L,
-        )
+        val second = repository.insert(notification(at = noon + 120_000L), now = noon + 120_000L)
 
         assertTrue(first is InsertOutcome.Inserted)
-        assertTrue(second is InsertOutcome.Duplicate)
+        assertTrue(second is InsertOutcome.Inserted)
+        assertEquals(2, repository.observeCount().first())
+    }
+
+    @Test
+    fun `two identical purchases minutes apart from one app are both kept`() = runTest {
+        // Two 8.00 coffees. Same app, same amount, three minutes apart, distinct
+        // notifications — genuinely two payments.
+        val first = repository.insert(notification(amountCents = 800L, at = noon), now = noon)
+        val second = repository.insert(notification(amountCents = 800L, at = noon + 180_000L), now = noon + 180_000L)
+
+        assertTrue(first is InsertOutcome.Inserted)
+        assertTrue(second is InsertOutcome.Inserted)
+        assertEquals(2, repository.observeCount().first())
     }
 
     @Test
     fun `two distinct bill rows with the same amount are both kept`() = runTest {
         // Two genuine ¥32 purchases a minute apart, each with its own transaction id.
-        val first = repository.insert(
-            notification(at = noon).copy(sourceTxnId = "4200001111"),
-            now = noon,
-        )
-        val second = repository.insert(
-            notification(at = noon + 60_000L).copy(sourceTxnId = "4200002222"),
-            now = noon + 60_000L,
-        )
+        val first = repository.insert(billRow(txnId = "4200001111", at = noon), now = noon)
+        val second = repository.insert(billRow(txnId = "4200002222", at = noon + 60_000L), now = noon + 60_000L)
 
         assertTrue(first is InsertOutcome.Inserted)
         assertTrue(second is InsertOutcome.Inserted)

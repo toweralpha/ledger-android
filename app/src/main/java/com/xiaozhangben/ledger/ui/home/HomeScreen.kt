@@ -34,6 +34,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.xiaozhangben.ledger.capture.CaptureHealth
+import com.xiaozhangben.ledger.capture.CaptureHealthEvaluator
 import com.xiaozhangben.ledger.core.DateX
 import com.xiaozhangben.ledger.core.Money
 import com.xiaozhangben.ledger.domain.budget.AlertLevel
@@ -122,31 +124,65 @@ fun HomeScreen(
 
             // Alerts sit between "how am I doing" and "where did it go", which is where
             // they are actually read.
+            //
+            // The first two branches are the important ones: "capture is broken" has to
+            // outrank everything else on this screen, because every number below it is
+            // wrong while it is true. Before this, the app only checked whether
+            // notification access had been *granted* — which stayed true while the system
+            // had stopped the listener, so two days of spending went unrecorded in
+            // complete silence.
             Spacer(Modifier.height(Spacing.gapM))
-            if (state.needsCaptureSetup) {
-                AlertStrip(
-                    text = "实时捕获未开启，付款不会自动记账",
-                    tone = AlertLevel.NEAR,
-                    actionLabel = "去开启",
-                    onAction = onOpenDiagnostics,
-                )
-                Spacer(Modifier.height(Spacing.gapS))
-            } else if (state.captureSilent) {
-                AlertStrip(
-                    text = "已经 ${silentDays(state)} 天没收到支付通知了，可能漏单",
-                    tone = AlertLevel.NEAR,
-                    actionLabel = "用账单补齐",
-                    onAction = onOpenImport,
-                )
-                Spacer(Modifier.height(Spacing.gapS))
-            } else if (state.needsNotificationPermission) {
-                AlertStrip(
-                    text = "通知权限未开启，记账提示卡不会出现",
-                    tone = AlertLevel.OK,
-                    actionLabel = "去开启",
-                    onAction = onOpenDiagnostics,
-                )
-                Spacer(Modifier.height(Spacing.gapS))
+            when (state.captureHealth) {
+                CaptureHealth.NOT_CONNECTED -> {
+                    AlertStrip(
+                        text = "实时捕获已停止，付款不会自动记账",
+                        tone = AlertLevel.OVER,
+                        actionLabel = "修复",
+                        onAction = { viewModel.repairCapture() },
+                    )
+                    Spacer(Modifier.height(Spacing.gapS))
+                    AlertStrip(
+                        text = "点「修复」没反应的话，去「我的」重新开关一次通知使用权",
+                        tone = AlertLevel.NEAR,
+                        actionLabel = "去设置",
+                        onAction = onOpenDiagnostics,
+                    )
+                    Spacer(Modifier.height(Spacing.gapS))
+                }
+
+                CaptureHealth.NOT_RECEIVING -> {
+                    AlertStrip(
+                        text = "已 ${silentDays(state)} 天没收到任何支付应用通知，可能漏单",
+                        tone = AlertLevel.NEAR,
+                        actionLabel = "用账单补齐",
+                        onAction = onOpenImport,
+                    )
+                    Spacer(Modifier.height(Spacing.gapS))
+                }
+
+                CaptureHealth.NOT_AUTHORISED -> {
+                    AlertStrip(
+                        text = "实时捕获未开启，付款不会自动记账",
+                        tone = AlertLevel.NEAR,
+                        actionLabel = "去开启",
+                        onAction = onOpenDiagnostics,
+                    )
+                    Spacer(Modifier.height(Spacing.gapS))
+                }
+
+                CaptureHealth.OFF -> Unit
+
+                CaptureHealth.OK -> {
+                    if (state.needsNotificationPermission) {
+                        AlertStrip(
+                            text = "通知权限未开启，记账提示卡不会出现",
+                            tone = AlertLevel.OK,
+                            actionLabel = "去开启",
+                            onAction = onOpenDiagnostics,
+                        )
+                        Spacer(Modifier.height(Spacing.gapS))
+                    }
+                }
             }
 
             if (state.unclassifiedCount > 0) {
@@ -181,7 +217,10 @@ fun HomeScreen(
 }
 
 private fun silentDays(state: HomeUiState): Int {
-    val last = state.lastCaptureAt ?: return HomeViewModel.SILENT_AFTER_MILLIS.toInt() / (24 * 60 * 60 * 1000)
+    // Measured from the last notification of any kind, not the last capture: a fortnight
+    // without spending is normal, a fortnight without a single WeChat notification is not.
+    val last = state.lastNotificationSeenAt
+        ?: return CaptureHealthEvaluator.NOT_RECEIVING_AFTER_MILLIS.toInt() / (24 * 60 * 60 * 1000)
     val days = ((System.currentTimeMillis() - last) / (24 * 60 * 60 * 1000L)).toInt()
     return days.coerceAtLeast(1)
 }

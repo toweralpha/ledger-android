@@ -169,9 +169,11 @@ class LedgerRepository(
                 Dedupe.looksLikeSamePayment(
                     amountA = candidate.amountCents,
                     timeA = candidate.occurredAt,
+                    notificationKeyA = candidate.notificationKey,
                     txnIdA = candidate.sourceTxnId,
                     amountB = input.amountCents,
                     timeB = input.occurredAt,
+                    notificationKeyB = input.notificationKey,
                     txnIdB = input.sourceTxnId,
                 )
             }
@@ -414,6 +416,21 @@ class LedgerRepository(
     }
 
     suspend fun recordCapture(now: Long) = captureStatsDao.recordCapture(now)
+
+    /**
+     * Heartbeat: a notification from a payment app reached the listener at all.
+     *
+     * Recorded even when the notification is not a payment, so it keeps updating on a
+     * phone where WeChat is merely being used. The diagnostics screen can then say
+     * "the listener is receiving" or "the listener has not seen anything for a day" —
+     * entirely different faults with different fixes.
+     */
+    suspend fun recordNotificationSeen(now: Long = System.currentTimeMillis()) =
+        captureStatsDao.recordNotificationSeen(now)
+
+    /** The watchdog had to reconnect the listener itself. */
+    suspend fun recordCaptureRepair(now: Long = System.currentTimeMillis()) =
+        captureStatsDao.recordRepair(now)
 
     /**
      * Persists why a notification was refused.

@@ -40,6 +40,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiaozhangben.ledger.BuildConfig
+import com.xiaozhangben.ledger.capture.CaptureHealth
 import com.xiaozhangben.ledger.capture.CapturePermissions
 import com.xiaozhangben.ledger.core.DateX
 import com.xiaozhangben.ledger.data.repository.ThemeMode
@@ -218,14 +219,48 @@ fun SettingsScreen(
         SectionHeader("后台存活自检")
         LedgerCard(Modifier.fillMaxWidth()) {
             Column {
+                // First row on purpose. "Is the listener actually running?" is the question
+                // that matters most and it is NOT the same as the permission switch above:
+                // the grant can be intact while the system has stopped the service, and
+                // that exact gap silently cost two days of unrecorded spending.
+                KeyValueRow(
+                    "监听器状态",
+                    when (state.captureHealth) {
+                        CaptureHealth.OK -> "运行中"
+                        CaptureHealth.OFF -> "已关闭"
+                        CaptureHealth.NOT_AUTHORISED -> "未授权"
+                        CaptureHealth.NOT_CONNECTED -> "未连接 —— 正在漏单"
+                        CaptureHealth.NOT_RECEIVING -> "已连接，但很久没收到通知"
+                    },
+                    valueColor = if (state.captureHealth == CaptureHealth.OK) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        DangerRed
+                    },
+                )
                 KeyValueRow(
                     "最近一次捕获",
                     state.stats?.lastCaptureAt?.let { DateX.formatDateTime(it) } ?: "还没有捕获过",
                 )
                 KeyValueRow("累计捕获", "${state.stats?.capturedCount ?: 0} 笔")
+                // The heartbeat. Any notification from WeChat or Alipay updates it, so it
+                // stays fresh on a day with no spending — which is what makes it a real
+                // liveness signal rather than a spending counter.
+                KeyValueRow(
+                    "最近收到通知",
+                    state.stats?.lastNotificationSeenAt?.let { DateX.formatDateTime(it) } ?: "—",
+                )
                 KeyValueRow(
                     "监听最近连接",
                     state.stats?.lastListenerConnectedAt?.let { DateX.formatDateTime(it) } ?: "—",
+                )
+                // Reported rather than announced. The watchdog reconnects on its own; this
+                // row is how the user can confirm it is working without being interrupted
+                // by a notification, and it counts how often this ROM drops the binding.
+                KeyValueRow(
+                    "自动重连",
+                    "${state.stats?.repairCount ?: 0} 次" +
+                        (state.stats?.lastRepairAt?.let { "（最近 " + DateX.formatDateTime(it) + "）" } ?: ""),
                 )
                 KeyValueRow(
                     "被系统回收次数",
@@ -250,13 +285,23 @@ fun SettingsScreen(
                 }
 
                 val silentDays = state.silentDays
-                if (state.captureHealthy && silentDays != null && silentDays >= 3) {
+                if (state.captureHealth == CaptureHealth.OK && silentDays != null && silentDays >= 3) {
                     Spacer(Modifier.height(Spacing.gapS))
                     AlertStrip(
-                        text = "已经 $silentDays 天没收到支付通知，可能在漏单。可以导入账单补齐。",
+                        text = "已经 $silentDays 天没收到任何支付应用通知，可能在漏单。可以导入账单补齐。",
                         tone = AlertLevel.NEAR,
                         actionLabel = "去导入",
                         onAction = onOpenImport,
+                    )
+                }
+                if (state.captureHealth == CaptureHealth.NOT_CONNECTED) {
+                    Spacer(Modifier.height(Spacing.gapS))
+                    AlertStrip(
+                        text = "系统没有在运行监听服务（授权还在，但服务没起来）。" +
+                            "把上面的「支付通知自动记账」关掉再打开，或重新开关一次通知使用权。",
+                        tone = AlertLevel.OVER,
+                        actionLabel = "重试绑定",
+                        onAction = { viewModel.retryListenerBinding() },
                     )
                 }
                 if (!state.listenerAuthorised) {
