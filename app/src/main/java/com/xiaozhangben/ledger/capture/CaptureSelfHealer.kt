@@ -53,6 +53,9 @@ object CaptureSelfHealer {
      */
     const val SETTLE_MILLIS = 1_200L
 
+    /** Extra time for the setting toggle to be picked up and the bind to be attempted. */
+    const val TOGGLE_SETTLE_MILLIS = 2_000L
+
     suspend fun ensureConnected(context: Context, captureEnabled: Boolean): Outcome {
         if (!captureEnabled) return Outcome.DISABLED
         if (!CapturePermissions.isListenerEnabled(context)) return Outcome.NOT_AUTHORISED
@@ -62,11 +65,21 @@ object CaptureSelfHealer {
         delay(SETTLE_MILLIS)
         if (CapturePermissions.isListenerConnected()) return Outcome.ALREADY_CONNECTED
 
-        // The documented recovery path. It is a static call precisely so it can be made
-        // when the service is not running — which is the state we are in.
+        // Least invasive first: cheap, and it is the documented API. It just happens not
+        // to cover the post-reboot case — see CapturePermissions.tryRebindListener.
         CapturePermissions.tryRebindListener(context)
         delay(SETTLE_MILLIS)
+        if (CapturePermissions.isListenerConnected()) return Outcome.REBOUND
 
-        return if (CapturePermissions.isListenerConnected()) Outcome.REBOUND else Outcome.STILL_DOWN
+        // The one that measurably works: remove and re-add our entry in
+        // `enabled_notification_listeners`, which is what a user does by toggling
+        // notification access by hand. It needs an optional `adb`-granted permission; when
+        // that is absent this is a no-op and the UI has to say so.
+        if (CapturePermissions.rebindByTogglingAuthorization(context)) {
+            delay(TOGGLE_SETTLE_MILLIS)
+            if (CapturePermissions.isListenerConnected()) return Outcome.REBOUND
+        }
+
+        return Outcome.STILL_DOWN
     }
 }

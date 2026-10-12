@@ -35,6 +35,8 @@ data class SettingsUiState(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val listenerAuthorised: Boolean = false,
     val listenerConnected: Boolean = false,
+    /** Whether the optional adb-granted permission is present, i.e. self-repair works. */
+    val canSelfRepair: Boolean = false,
     val notificationsAllowed: Boolean = true,
     val stats: CaptureStatsEntity? = null,
     val transactionCount: Int = 0,
@@ -91,6 +93,8 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         val listenerAuthorised: Boolean = false,
         val listenerConnected: Boolean = false,
         val notificationsAllowed: Boolean = true,
+        /** Whether the optional adb-granted permission is present, i.e. self-repair works. */
+        val canWriteSecureSettings: Boolean = false,
     )
 
     private val _backupEvent = MutableStateFlow<BackupEvent>(BackupEvent.Idle)
@@ -160,6 +164,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
             themeMode = prefs.themeMode,
             listenerAuthorised = env.listenerAuthorised,
             listenerConnected = env.listenerConnected,
+            canSelfRepair = env.canWriteSecureSettings,
             notificationsAllowed = env.notificationsAllowed,
             stats = data.stats,
             transactionCount = data.transactionCount,
@@ -179,6 +184,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
             listenerAuthorised = CapturePermissions.isListenerEnabled(context),
             listenerConnected = CapturePermissions.isListenerConnected(),
             notificationsAllowed = CapturePermissions.canPostNotifications(context),
+            canWriteSecureSettings = CapturePermissions.canWriteSecureSettings(context),
         )
     }
 

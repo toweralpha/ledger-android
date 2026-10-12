@@ -262,6 +262,23 @@ fun SettingsScreen(
                     "${state.stats?.repairCount ?: 0} 次" +
                         (state.stats?.lastRepairAt?.let { "（最近 " + DateX.formatDateTime(it) + "）" } ?: ""),
                 )
+                // Whether the repair can actually happen. requestRebind() does not cover
+                // the post-reboot case, so without the optional adb grant the app can
+                // detect the failure but not fix it — and the user needs to know which of
+                // those two situations they are in.
+                KeyValueRow(
+                    "自愈能力",
+                    if (state.canSelfRepair) {
+                        "完整"
+                    } else {
+                        "受限 —— 重启后需手动开关一次通知使用权"
+                    },
+                    valueColor = if (state.canSelfRepair) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        DangerRed
+                    },
+                )
                 KeyValueRow(
                     "被系统回收次数",
                     "${state.stats?.disconnectedCount ?: 0} 次",

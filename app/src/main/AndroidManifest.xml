@@ -16,6 +16,26 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <!--
+      Optional, and NOT granted by installing the app. It has protectionLevel
+      signature|privileged|development, so it can only be granted by hand:
+
+          adb shell pm grant com.xiaozhangben.ledger android.permission.WRITE_SECURE_SETTINGS
+
+      It exists for exactly one purpose: re-binding the notification listener after a
+      reboot on ROMs that do not do it themselves. On such a device the documented
+      recovery API (NotificationListenerService.requestRebind) is a no-op, because it
+      only covers "the listener was disconnected", not "the system never bound it". The
+      operation that provably works is removing and re-adding our entry in
+      `enabled_notification_listeners`, which requires this permission.
+
+      Without it the app works normally and simply cannot repair the binding by itself;
+      everything that uses the permission is guarded by a runtime check.
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
     <!-- Visibility for the two payment apps only; avoids QUERY_ALL_PACKAGES. -->
     <queries>
         <package android:name="com.eg.android.AlipayGphone" />

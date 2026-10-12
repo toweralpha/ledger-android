@@ -55,14 +55,62 @@ object CapturePermissions {
      *
      * `requestRebind` is a static entry point precisely so it can be called from outside
      * the running service — which is what is needed here, because the failed state is
-     * "the service is not running" and there is no instance to ask. The system still
-     * gets the final say, hence the boolean.
+     * "the service is not running" and there is no instance to ask.
+     *
+     * **Measured to be a no-op for the post-reboot case.** AOSP gates it on its list of
+     * *disconnected* listeners, so it recovers "the app was unresponsive and got
+     * unbound" but does nothing for "the system never bound it after a reboot". Kept
+     * because it is the cheap, non-invasive first attempt; see
+     * [rebindByTogglingAuthorization] for the one that works.
      */
     fun tryRebindListener(context: Context): Boolean = runCatching {
         val component = ComponentName(context, PaymentNotificationListenerService::class.java)
         android.service.notification.NotificationListenerService.requestRebind(component)
         true
     }.getOrDefault(false)
+
+    /** Whether the optional `WRITE_SECURE_SETTINGS` grant is present. */
+    fun canWriteSecureSettings(context: Context): Boolean =
+        context.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Re-binds the listener by removing and re-adding our entry in
+     * `enabled_notification_listeners` — exactly what a user does by toggling
+     * notification access off and on by hand.
+     *
+     * This is the one that demonstrably works. On a device where a reboot left the
+     * listener unbound with its permission intact, `requestRebind()` returned without
+     * effect and the service stayed down, while this toggle restored it immediately
+     * (`ServiceRecord … isBindService:true`).
+     *
+     * Requires [canWriteSecureSettings], an optional grant that only `adb shell pm grant`
+     * can provide. Returns false when it is missing, or when we are not currently
+     * authorised — in that last case only the user can help.
+     *
+     * Note the blocking sleep: the two writes must be distinct, because the system reacts
+     * to the *change*. A single write that removes and re-adds in one step looks like
+     * nothing happened and rebinds nothing. Callers run on a background dispatcher.
+     */
+    fun rebindByTogglingAuthorization(context: Context): Boolean {
+        if (!canWriteSecureSettings(context)) return false
+        return runCatching {
+            val resolver = context.contentResolver
+            val ours = ComponentName(context, PaymentNotificationListenerService::class.java)
+                .flattenToString()
+            val current = Settings.Secure.getString(resolver, ENABLED_LISTENERS) ?: return false
+            val entries = current.split(':').filter { it.isNotBlank() }
+            if (entries.none { it.equals(ours, ignoreCase = true) }) return false
+
+            val without = entries.filterNot { it.equals(ours, ignoreCase = true) }
+            Settings.Secure.putString(resolver, ENABLED_LISTENERS, without.joinToString(":"))
+            Thread.sleep(TOGGLE_GAP_MILLIS)
+            Settings.Secure.putString(resolver, ENABLED_LISTENERS, (without + ours).joinToString(":"))
+            true
+        }.getOrDefault(false)
+    }
+
+    private const val TOGGLE_GAP_MILLIS = 400L
 
     fun openListenerSettings(context: Context) {
         safeStart(context, Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
